@@ -4,7 +4,7 @@ from pathlib import Path
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
+
 
 st.set_page_config(
     page_title="COMAE — Painel Gerencial",
@@ -562,19 +562,21 @@ def run_dashboard():
     # ── Filtros ────────────────────────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    # Opção COMAE sempre disponível; demais unidades vêm de disp_df + df_ne
+    # Unidades vêm de disp_df + df_ne; COMAE é detectado pelo nome
     ug_from_disp = set(disp_df["Unidade"].dropna().unique()) if not disp_df.empty else set()
     ug_from_ne   = set(df_ne["Unidade"].dropna().unique())   if not df_ne.empty   else set()
-    ug_opts_raw  = sorted({str(v) for v in (ug_from_disp | ug_from_ne)
+    ug_opts      = sorted({str(v) for v in (ug_from_disp | ug_from_ne)
                            if str(v).strip() not in ("", "nan")})
-    ug_opts = ["COMAE"] + ug_opts_raw
+    comae_idx    = next((i for i, u in enumerate(ug_opts)
+                         if "COMANDO DE OPERACOES AEROESPACIAIS" in u.upper()), 0)
 
     f1, f2, f3, f4, f5, f6 = st.columns([1.1, 3.2, 3.2, 2.5, 0.38, 0.38])
     with f1:
         op_sel = st.selectbox("Operação", ["Todos", "CATRIMANI", "ZIDA"],
                               label_visibility="collapsed")
     with f2:
-        ug_sel = st.selectbox("Unidade", ug_opts, label_visibility="collapsed")
+        ug_sel = st.selectbox("Unidade", ug_opts, index=comae_idx,
+                              label_visibility="collapsed")
     with f3:
         nat_opts = sorted({str(v) for v in df["Natureza_Despesa"]
                            if pd.notna(v) and str(v).strip() not in ("", "—", "nan")})
@@ -592,7 +594,7 @@ def run_dashboard():
             st.session_state.logged_in = False
             st.rerun()
 
-    is_comae = (ug_sel == "COMAE")
+    is_comae = "COMANDO DE OPERACOES AEROESPACIAIS" in ug_sel.upper()
 
     # P1 — dados COMAE (filtrados por op/nat/busca, nunca por unidade)
     d = df.copy()
@@ -715,35 +717,24 @@ def run_dashboard():
                 st.plotly_chart(fig1, use_container_width=True, config=chart_cfg())
 
         with col2:
-            st.markdown('<div class="section-title">Empenhos por Unidade</div>',
+            st.markdown('<div class="section-title">Total Empenhado por Unidade</div>',
                         unsafe_allow_html=True)
             if not df_ne.empty:
-                emp_ug = (df_ne.groupby("Unidade", as_index=False)
-                          .agg(Empenhado=("Empenhado","sum"),
-                               A_Pagar=("A_Pagar","sum"),
-                               Pago=("Pago","sum"))
-                          .sort_values("Empenhado", ascending=True).tail(10))
-                emp_ug["fmt_emp"] = emp_ug["Empenhado"].apply(fmt_brl)
-                emp_ug["fmt_apg"] = emp_ug["A_Pagar"].apply(fmt_brl)
-                emp_ug["fmt_pgo"] = emp_ug["Pago"].apply(fmt_brl)
-                fig2 = go.Figure()
-                for ck, lb, cr, fc in [("Empenhado","Empenhado","#fbbf24","fmt_emp"),
-                                        ("A_Pagar","A Pagar","#f87171","fmt_apg"),
-                                        ("Pago","Pago","#4ade80","fmt_pgo")]:
-                    fig2.add_trace(go.Bar(
-                        x=emp_ug[ck], y=emp_ug["Unidade"], orientation="h",
-                        name=lb, marker_color=cr, text=emp_ug[fc],
-                        textposition="outside", textfont=dict(size=8, color="#94a3b8"),
-                        hovertemplate=f"%{{y}}<br>{lb}: <b>%{{text}}</b><extra></extra>",
-                        cliponaxis=False))
-                max_v = emp_ug[["Empenhado","A_Pagar","Pago"]].max().max() if not emp_ug.empty else 1
-                fig2.update_xaxes(range=[0, max_v * 1.5], tickformat=",.0f", showticklabels=False)
-                layout2 = chart_layout(max(300, len(emp_ug) * 55))
-                layout2["barmode"] = "group"
-                layout2["margin"]  = dict(l=0, r=180, t=30, b=0)
-                layout2["legend"]  = dict(orientation="h", yanchor="bottom", y=1.02,
-                                          xanchor="right", x=1, bgcolor="rgba(0,0,0,0)")
-                fig2.update_layout(**layout2)
+                emp_ug = (df_ne.groupby("Unidade", as_index=False)["Total"].sum()
+                          .sort_values("Total", ascending=True).tail(10))
+                emp_ug["fmt"] = emp_ug["Total"].apply(fmt_brl)
+                fig2 = px.bar(emp_ug, x="Total", y="Unidade", orientation="h",
+                              color_discrete_sequence=["#fbbf24"],
+                              labels={"Total": "", "Unidade": ""},
+                              custom_data=["fmt"])
+                fig2.update_traces(
+                    text=emp_ug["fmt"], textposition="outside",
+                    textfont=dict(size=9, color="#94a3b8"),
+                    hovertemplate="%{y}<br>Total: <b>%{customdata[0]}</b><extra></extra>",
+                    cliponaxis=False)
+                max_v = emp_ug["Total"].max() if not emp_ug.empty else 1
+                fig2.update_xaxes(range=[0, max_v * 1.45], tickformat=",.0f", showticklabels=False)
+                fig2.update_layout(**chart_layout(max(280, len(emp_ug) * 42)))
                 st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
 
     # ── Tabelas ───────────────────────────────────────────────────────────────
