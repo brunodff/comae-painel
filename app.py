@@ -513,7 +513,8 @@ def load_disponivel() -> pd.DataFrame:
         df_disp["Valor"].notna() &
         (df_disp["Valor"] != 0) &
         df_disp["Unidade"].notna() &
-        ~df_disp["Unidade"].str.strip().isin(["", "nan", "NaN"])
+        ~df_disp["Unidade"].str.strip().isin(["", "nan", "NaN"]) &
+        ~df_disp["Unidade"].str.upper().str.contains("TOTAL|SOMA|GRAND", na=False)
     ].copy()
 
     return df_disp.reset_index(drop=True)
@@ -561,12 +562,12 @@ def run_dashboard():
     # ── Filtros ────────────────────────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    # Unidades disponíveis (de disp_df + df_ne)
+    # Opção COMAE sempre disponível; demais unidades vêm de disp_df + df_ne
     ug_from_disp = set(disp_df["Unidade"].dropna().unique()) if not disp_df.empty else set()
     ug_from_ne   = set(df_ne["Unidade"].dropna().unique())   if not df_ne.empty   else set()
     ug_opts_raw  = sorted({str(v) for v in (ug_from_disp | ug_from_ne)
                            if str(v).strip() not in ("", "nan")})
-    ug_opts      = ["Todas"] + ug_opts_raw
+    ug_opts = ["COMAE"] + ug_opts_raw
 
     f1, f2, f3, f4, f5, f6 = st.columns([1.1, 3.2, 3.2, 2.5, 0.38, 0.38])
     with f1:
@@ -591,7 +592,9 @@ def run_dashboard():
             st.session_state.logged_in = False
             st.rerun()
 
-    # ── Dataset principal (COMAE) — filtrado por op/nat/busca ─────────────────
+    is_comae = (ug_sel == "COMAE")
+
+    # P1 — dados COMAE (filtrados por op/nat/busca, nunca por unidade)
     d = df.copy()
     if op_sel != "Todos":
         d = d[d["Operacao"] == op_sel]
@@ -601,247 +604,172 @@ def run_dashboard():
         m0 = d.apply(lambda r: search.lower() in r.astype(str).str.cat(sep=" ").lower(), axis=1)
         d = d[m0]
 
-    # ── Disponível e empenhos filtrados por unidade ────────────────────────────
-    def _filt_by_ug(frame: pd.DataFrame, col: str) -> pd.DataFrame:
-        if frame.empty or ug_sel == "Todas":
+    # P2/P3 — filtrados por unidade selecionada
+    def _filt_unit(frame: pd.DataFrame, col: str) -> pd.DataFrame:
+        if frame.empty or is_comae:
             return frame.copy()
         term = ug_sel[:30].upper()
         mask = frame[col].str.upper().str.contains(term, na=False, regex=False)
-        return frame[mask].copy() if mask.any() else frame.copy()
+        return frame[mask].copy() if mask.any() else pd.DataFrame()
 
-    disp_filt = _filt_by_ug(disp_df, "Unidade")
-    ne_filt   = _filt_by_ug(df_ne,   "Unidade")
+    disp_filt = _filt_unit(disp_df, "Unidade")
+    ne_filt   = _filt_unit(df_ne,   "Unidade")
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
     st.divider()
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
-    total_disp      = disp_filt["Valor"].sum() if not disp_filt.empty else 0.0
-    total_empenhado = ne_filt["Total"].sum()   if not ne_filt.empty   else 0.0
-
-    if ug_sel == "Todas":
-        # Visão COMAE: recebido e descentralizado vêm da planilha principal
+    if is_comae:
         total_recebido = d[d["Valor"] > 0]["Valor"].sum()
         total_descentr = d[d["Valor"] < 0]["Valor"].abs().sum()
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2 = st.columns(2)
         c1.metric("💰 Crédito Recebido",                   fmt_brl(total_recebido))
-        c2.metric("📊 Crédito Disponível",                 fmt_brl(total_disp))
-        c3.metric("📋 Crédito Empenhado",                  fmt_brl(total_empenhado))
-        c4.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
+        c2.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
     else:
-        # Visão unidade: recebido = disponível + empenhado
-        total_recebido = total_disp + total_empenhado
+        total_disp = disp_filt["Valor"].sum() if not disp_filt.empty else 0.0
+        total_emp  = ne_filt["Total"].sum()   if not ne_filt.empty   else 0.0
         c1, c2, c3 = st.columns(3)
-        c1.metric("💰 Crédito Recebido",   fmt_brl(total_recebido))
+        c1.metric("💰 Crédito Recebido",   fmt_brl(total_disp + total_emp))
         c2.metric("📊 Crédito Disponível", fmt_brl(total_disp))
-        c3.metric("📋 Crédito Empenhado",  fmt_brl(total_empenhado))
+        c3.metric("📋 Crédito Empenhado",  fmt_brl(total_emp))
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # ── Gráficos — linha 1: Recebido | Disponível ─────────────────────────────
+    # ── Gráficos ──────────────────────────────────────────────────────────────
     col1, col2 = st.columns(2)
 
-    with col1:
-        if ug_sel == "Todas":
-            # COMAE: recebido por natureza (planilha principal, positivos)
+    if is_comae:
+        # COMAE: Recebido por Natureza | Descentralizado por Natureza
+        with col1:
             st.markdown('<div class="section-title">Crédito Recebido por Natureza</div>',
                         unsafe_allow_html=True)
-            nat_src = (
-                d[d["Valor"] > 0]
-                .groupby("Natureza_Despesa", as_index=False)["Valor"].sum()
-                .sort_values("Valor").tail(10)
-            )
-            y_col = "Natureza_Despesa"
-        else:
-            # Unidade: disponível por natureza
-            st.markdown('<div class="section-title">Crédito Disponível por Natureza</div>',
+            nat_rec = (d[d["Valor"] > 0]
+                       .groupby("Natureza_Despesa", as_index=False)["Valor"].sum()
+                       .sort_values("Valor").tail(10))
+            if not nat_rec.empty:
+                nat_rec["fmt"] = nat_rec["Valor"].apply(fmt_brl)
+                fig1 = px.bar(nat_rec, x="Valor", y="Natureza_Despesa", orientation="h",
+                              color_discrete_sequence=["#7c3aed"],
+                              labels={"Valor": "", "Natureza_Despesa": ""},
+                              custom_data=["fmt"])
+                fig1.update_traces(text=nat_rec["fmt"], textposition="outside",
+                                   textfont=dict(size=9, color="#94a3b8"),
+                                   hovertemplate="%{y}<br><b>%{customdata[0]}</b><extra></extra>",
+                                   cliponaxis=False)
+                max_v = nat_rec["Valor"].max()
+                fig1.update_xaxes(range=[0, max_v * 1.45], tickformat=",.0f", showticklabels=False)
+                fig1.update_layout(**chart_layout(max(280, len(nat_rec) * 42)))
+                st.plotly_chart(fig1, use_container_width=True, config=chart_cfg())
+
+        with col2:
+            st.markdown('<div class="section-title">Crédito Descentralizado por Natureza</div>',
                         unsafe_allow_html=True)
-            nat_src = (
-                disp_filt.groupby("Natureza", as_index=False)["Valor"].sum()
-                .sort_values("Valor").tail(10)
-            )
-            y_col = "Natureza"
+            nat_desc = (d[d["Valor"] < 0]
+                        .groupby("Natureza_Despesa", as_index=False)["Valor"].sum()
+                        .assign(Valor=lambda x: x["Valor"].abs())
+                        .sort_values("Valor").tail(10))
+            if not nat_desc.empty:
+                nat_desc["fmt"] = nat_desc["Valor"].apply(fmt_brl)
+                fig2 = px.bar(nat_desc, x="Valor", y="Natureza_Despesa", orientation="h",
+                              color_discrete_sequence=["#f59e0b"],
+                              labels={"Valor": "", "Natureza_Despesa": ""},
+                              custom_data=["fmt"])
+                fig2.update_traces(text=nat_desc["fmt"], textposition="outside",
+                                   textfont=dict(size=9, color="#94a3b8"),
+                                   hovertemplate="%{y}<br><b>%{customdata[0]}</b><extra></extra>",
+                                   cliponaxis=False)
+                max_v = nat_desc["Valor"].max()
+                fig2.update_xaxes(range=[0, max_v * 1.45], tickformat=",.0f", showticklabels=False)
+                fig2.update_layout(**chart_layout(max(280, len(nat_desc) * 42)))
+                st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
+    else:
+        # Unidade: Disponível por Unidade | Empenhos por Unidade
+        with col1:
+            st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
+                        unsafe_allow_html=True)
+            if not disp_df.empty:
+                ug_disp = (disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
+                           .sort_values("Valor").tail(10))
+                nat_per_ug = (disp_df.groupby(["Unidade", "Natureza"])["Valor"]
+                              .sum().reset_index()
+                              .sort_values(["Unidade", "Valor"], ascending=[True, False]))
+                def _nat_hover(u):
+                    sub = nat_per_ug[nat_per_ug["Unidade"] == u]
+                    return "<br>".join(f"• {r['Natureza'][:35]}: {fmt_brl(r['Valor'])}"
+                                       for _, r in sub.head(5).iterrows()) or "—"
+                ug_disp["fmt"]      = ug_disp["Valor"].apply(fmt_brl)
+                ug_disp["nat_info"] = ug_disp["Unidade"].apply(_nat_hover)
+                fig1 = px.bar(ug_disp, x="Valor", y="Unidade", orientation="h",
+                              color_discrete_sequence=["#f59e0b"],
+                              labels={"Valor": "", "Unidade": ""},
+                              custom_data=["fmt", "nat_info"])
+                fig1.update_traces(
+                    text=ug_disp["fmt"], textposition="outside",
+                    textfont=dict(size=9, color="#94a3b8"),
+                    hovertemplate=("<b>%{y}</b><br>Disponível: %{customdata[0]}"
+                                   "<br><br><i>Por Natureza:</i><br>%{customdata[1]}<extra></extra>"),
+                    cliponaxis=False)
+                max_v = ug_disp["Valor"].max() if not ug_disp.empty else 1
+                fig1.update_xaxes(range=[0, max_v * 1.45], tickformat=",.0f", showticklabels=False)
+                fig1.update_layout(**chart_layout(max(280, len(ug_disp) * 42)))
+                st.plotly_chart(fig1, use_container_width=True, config=chart_cfg())
 
-        if not nat_src.empty:
-            nat_src["fmt"] = nat_src["Valor"].apply(fmt_brl)
-            fig1 = px.bar(nat_src, x="Valor", y=y_col, orientation="h",
-                          color_discrete_sequence=["#7c3aed"],
-                          labels={"Valor": "", y_col: ""},
-                          custom_data=["fmt"])
-            fig1.update_traces(
-                text=nat_src["fmt"], textposition="outside",
-                textfont=dict(size=9, color="#94a3b8"),
-                hovertemplate="%{y}<br><b>%{customdata[0]}</b><extra></extra>",
-                cliponaxis=False,
-            )
-            max_v1 = nat_src["Valor"].max()
-            fig1.update_xaxes(range=[0, max_v1 * 1.45], tickformat=",.0f", showticklabels=False)
-            fig1.update_layout(**chart_layout(max(280, len(nat_src) * 42)))
-            st.plotly_chart(fig1, use_container_width=True, config=chart_cfg())
+        with col2:
+            st.markdown('<div class="section-title">Empenhos por Unidade</div>',
+                        unsafe_allow_html=True)
+            if not df_ne.empty:
+                emp_ug = (df_ne.groupby("Unidade", as_index=False)
+                          .agg(Empenhado=("Empenhado","sum"),
+                               A_Pagar=("A_Pagar","sum"),
+                               Pago=("Pago","sum"))
+                          .sort_values("Empenhado", ascending=True).tail(10))
+                emp_ug["fmt_emp"] = emp_ug["Empenhado"].apply(fmt_brl)
+                emp_ug["fmt_apg"] = emp_ug["A_Pagar"].apply(fmt_brl)
+                emp_ug["fmt_pgo"] = emp_ug["Pago"].apply(fmt_brl)
+                fig2 = go.Figure()
+                for ck, lb, cr, fc in [("Empenhado","Empenhado","#fbbf24","fmt_emp"),
+                                        ("A_Pagar","A Pagar","#f87171","fmt_apg"),
+                                        ("Pago","Pago","#4ade80","fmt_pgo")]:
+                    fig2.add_trace(go.Bar(
+                        x=emp_ug[ck], y=emp_ug["Unidade"], orientation="h",
+                        name=lb, marker_color=cr, text=emp_ug[fc],
+                        textposition="outside", textfont=dict(size=8, color="#94a3b8"),
+                        hovertemplate=f"%{{y}}<br>{lb}: <b>%{{text}}</b><extra></extra>",
+                        cliponaxis=False))
+                max_v = emp_ug[["Empenhado","A_Pagar","Pago"]].max().max() if not emp_ug.empty else 1
+                fig2.update_xaxes(range=[0, max_v * 1.5], tickformat=",.0f", showticklabels=False)
+                layout2 = chart_layout(max(300, len(emp_ug) * 55))
+                layout2["barmode"] = "group"
+                layout2["margin"]  = dict(l=0, r=180, t=30, b=0)
+                layout2["legend"]  = dict(orientation="h", yanchor="bottom", y=1.02,
+                                          xanchor="right", x=1, bgcolor="rgba(0,0,0,0)")
+                fig2.update_layout(**layout2)
+                st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
 
-    with col2:
-        st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
-                    unsafe_allow_html=True)
-        if not disp_filt.empty:
-            ug_disp = (
-                disp_filt.groupby("Unidade", as_index=False)["Valor"].sum()
-                .sort_values("Valor").tail(10)
-            )
-            nat_per_ug_disp = (
-                disp_filt.groupby(["Unidade", "Natureza"])["Valor"]
-                .sum().reset_index()
-                .sort_values(["Unidade", "Valor"], ascending=[True, False])
-            )
-            def _nat_hover(ug_name):
-                sub = nat_per_ug_disp[nat_per_ug_disp["Unidade"] == ug_name]
-                return "<br>".join(
-                    f"• {r['Natureza'][:35]}: {fmt_brl(r['Valor'])}"
-                    for _, r in sub.head(5).iterrows()
-                ) or "—"
-
-            ug_disp["fmt"]      = ug_disp["Valor"].apply(fmt_brl)
-            ug_disp["nat_info"] = ug_disp["Unidade"].apply(_nat_hover)
-            fig2 = px.bar(ug_disp, x="Valor", y="Unidade", orientation="h",
-                          color_discrete_sequence=["#f59e0b"],
-                          labels={"Valor": "", "Unidade": ""},
-                          custom_data=["fmt", "nat_info"])
-            fig2.update_traces(
-                text=ug_disp["fmt"], textposition="outside",
-                textfont=dict(size=9, color="#94a3b8"),
-                hovertemplate=(
-                    "<b>%{y}</b><br>Disponível: %{customdata[0]}"
-                    "<br><br><i>Por Natureza:</i><br>%{customdata[1]}<extra></extra>"
-                ),
-                cliponaxis=False,
-            )
-            max_v2 = ug_disp["Valor"].max() if not ug_disp.empty else 1
-            fig2.update_xaxes(range=[0, max_v2 * 1.45], tickformat=",.0f", showticklabels=False)
-            fig2.update_layout(**chart_layout(max(280, len(ug_disp) * 42)))
-            st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
-        elif disp_df.empty:
-            st.info("Dados de crédito disponível não encontrados.")
-
-    # ── Gráficos — linha 2: Desc. por Mês | Desc. por Natureza ───────────────
-    col3, col4 = st.columns(2)
-
-    with col3:
-        st.markdown('<div class="section-title">Crédito Descentralizado por Mês</div>',
-                    unsafe_allow_html=True)
-        td_neg = d[d["Valor"] < 0].copy()
-        if not td_neg.empty:
-            td_neg["Mes"]       = td_neg["Data_Emissao"].dt.to_period("M").astype(str)
-            td_neg["Valor_abs"] = td_neg["Valor"].abs()
-            ev_neg = td_neg.groupby(["Mes", "Operacao"], as_index=False)["Valor_abs"].sum()
-            ev_neg["fmt"] = ev_neg["Valor_abs"].apply(fmt_brl)
-            fig3 = px.bar(ev_neg, x="Mes", y="Valor_abs", color="Operacao", barmode="group",
-                          color_discrete_map={"ZIDA": "#7c3aed", "CATRIMANI": "#f59e0b"},
-                          labels={"Valor_abs": "", "Mes": "", "Operacao": "Operação"},
-                          custom_data=["fmt"])
-            fig3.update_traces(
-                text=ev_neg["fmt"], textposition="outside",
-                textfont=dict(size=8, color="#94a3b8"),
-                hovertemplate="%{x} · %{fullData.name}<br><b>%{customdata[0]}</b><extra></extra>",
-                cliponaxis=False,
-            )
-            max_v3 = ev_neg["Valor_abs"].max() if not ev_neg.empty else 1
-            fig3.update_yaxes(range=[0, max_v3 * 1.4], tickformat=",.0f", showticklabels=False)
-            fig3.update_layout(**chart_layout(300))
-            st.plotly_chart(fig3, use_container_width=True, config=chart_cfg())
-        else:
-            st.info("Sem crédito descentralizado para os filtros selecionados.")
-
-    with col4:
-        st.markdown('<div class="section-title">Crédito Descentralizado por Natureza de Despesa</div>',
-                    unsafe_allow_html=True)
-        nat_neg = (
-            d[d["Valor"] < 0]
-            .groupby("Natureza_Despesa", as_index=False)["Valor"].sum()
-        )
-        if not nat_neg.empty:
-            nat_neg["Valor"] = nat_neg["Valor"].abs()
-            nat_neg = nat_neg.sort_values("Valor", ascending=False).head(8)
-            nat_neg["fmt"] = nat_neg["Valor"].apply(fmt_brl)
-            fig4 = px.bar(nat_neg, x="Natureza_Despesa", y="Valor",
-                          color_discrete_sequence=["#f59e0b"],
-                          labels={"Valor": "", "Natureza_Despesa": ""},
-                          custom_data=["fmt"])
-            fig4.update_traces(
-                text=nat_neg["fmt"], textposition="outside",
-                textfont=dict(size=8, color="#94a3b8"),
-                hovertemplate="%{x}<br><b>%{customdata[0]}</b><extra></extra>",
-                cliponaxis=False,
-            )
-            max_v4 = nat_neg["Valor"].max() if not nat_neg.empty else 1
-            fig4.update_yaxes(range=[0, max_v4 * 1.4], tickformat=",.0f", showticklabels=False)
-            fig4.update_layout(**chart_layout(300, angle=-30))
-            st.plotly_chart(fig4, use_container_width=True, config=chart_cfg())
-        else:
-            st.info("Sem crédito descentralizado para os filtros selecionados.")
-
-    # ── Gráfico — Empenhos por Unidade ────────────────────────────────────────
-    if not ne_filt.empty:
-        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="section-title">Empenhos por Unidade</div>',
-                    unsafe_allow_html=True)
-        emp_ug = (
-            ne_filt.groupby("Unidade", as_index=False)
-            .agg(Empenhado=("Empenhado","sum"), A_Pagar=("A_Pagar","sum"), Pago=("Pago","sum"))
-            .sort_values("Empenhado", ascending=True).tail(10)
-        )
-        emp_ug["fmt_emp"] = emp_ug["Empenhado"].apply(fmt_brl)
-        emp_ug["fmt_apg"] = emp_ug["A_Pagar"].apply(fmt_brl)
-        emp_ug["fmt_pgo"] = emp_ug["Pago"].apply(fmt_brl)
-
-        fig5 = go.Figure()
-        for col_key, label, color, fmt_col in [
-            ("Empenhado", "Empenhado", "#fbbf24", "fmt_emp"),
-            ("A_Pagar",   "A Pagar",   "#f87171", "fmt_apg"),
-            ("Pago",      "Pago",      "#4ade80",  "fmt_pgo"),
-        ]:
-            fig5.add_trace(go.Bar(
-                x=emp_ug[col_key], y=emp_ug["Unidade"], orientation="h",
-                name=label, marker_color=color,
-                text=emp_ug[fmt_col], textposition="outside",
-                textfont=dict(size=8, color="#94a3b8"),
-                customdata=emp_ug[[fmt_col]].values,
-                hovertemplate=f"%{{y}}<br>{label}: <b>%{{customdata[0]}}</b><extra></extra>",
-                cliponaxis=False,
-            ))
-        max_v5 = emp_ug[["Empenhado","A_Pagar","Pago"]].max().max() if not emp_ug.empty else 1
-        fig5.update_xaxes(range=[0, max_v5 * 1.5], tickformat=",.0f", showticklabels=False)
-        layout5 = chart_layout(max(300, len(emp_ug) * 55))
-        layout5["barmode"] = "group"
-        layout5["margin"]  = dict(l=0, r=180, t=30, b=0)
-        layout5["legend"]  = dict(orientation="h", yanchor="bottom", y=1.02,
-                                  xanchor="right", x=1, bgcolor="rgba(0,0,0,0)")
-        fig5.update_layout(**layout5)
-        st.plotly_chart(fig5, use_container_width=True, config=chart_cfg())
-
-    # ── Tabelas — Tabs NC / NE ─────────────────────────────────────────────────
+    # ── Tabelas ───────────────────────────────────────────────────────────────
     st.divider()
-    tab_nc, tab_ne = st.tabs(["📄  Notas de Crédito", "📋  Notas de Empenho"])
-
-    with tab_nc:
-        ncs = (
-            d[d["Valor"] > 0]
-            .groupby("NC", as_index=False)
-            .agg(
-                Data      = ("Data_Emissao", "first"),
-                Descricao = ("Descricao",    "first"),
-                Nr_Pedido = ("Nr_Pedido",    "first"),
-                Operacao  = ("Operacao",     "first"),
-                Total     = ("Valor",        "sum"),
-            )
-            .sort_values("Data", ascending=False)
-        )
-        st.markdown(build_nc_html(ncs, d), unsafe_allow_html=True)
-
-    with tab_ne:
+    if is_comae:
+        tab_nc, tab_ne = st.tabs(["📄  Notas de Crédito", "📋  Notas de Empenho"])
+        with tab_nc:
+            ncs = (d[d["Valor"] > 0]
+                   .groupby("NC", as_index=False)
+                   .agg(Data=("Data_Emissao","first"), Descricao=("Descricao","first"),
+                        Nr_Pedido=("Nr_Pedido","first"), Operacao=("Operacao","first"),
+                        Total=("Valor","sum"))
+                   .sort_values("Data", ascending=False))
+            st.markdown(build_nc_html(ncs, d), unsafe_allow_html=True)
+        with tab_ne:
+            if not df_ne.empty:
+                st.markdown(build_ne_html(df_ne.sort_values("Total", ascending=False)),
+                            unsafe_allow_html=True)
+            else:
+                st.info("Nenhum empenho encontrado.")
+    else:
         if not ne_filt.empty:
-            ne_show = ne_filt.sort_values("Total", ascending=False)
-            st.markdown(build_ne_html(ne_show), unsafe_allow_html=True)
+            st.markdown(build_ne_html(ne_filt.sort_values("Total", ascending=False)),
+                        unsafe_allow_html=True)
         else:
-            st.info("Nenhum empenho encontrado para os filtros selecionados.")
+            st.info("Nenhum empenho encontrado para esta unidade.")
 
 
 # ─── ENTRADA ──────────────────────────────────────────────────────────────────
