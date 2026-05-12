@@ -611,7 +611,7 @@ def run_dashboard():
 
     # P2/P3 — filtrados por unidade selecionada
     def _filt_unit(frame: pd.DataFrame, col: str) -> pd.DataFrame:
-        if frame.empty or is_comae:
+        if frame.empty:
             return frame.copy()
         term = ug_sel[:30].upper()
         mask = frame[col].str.upper().str.contains(term, na=False, regex=False)
@@ -627,7 +627,7 @@ def run_dashboard():
     if is_comae:
         total_recebido = d[d["Valor"] > 0]["Valor"].sum()
         total_descentr = d[d["Valor"] < 0]["Valor"].abs().sum()
-        total_disp_all = disp_df["Valor"].sum() if not disp_df.empty else 0.0
+        total_disp_all = disp_filt["Valor"].sum() if not disp_filt.empty else 0.0
         c1, c2, c3 = st.columns(3)
         c1.metric("💰 Crédito Recebido",                   fmt_brl(total_recebido))
         c2.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
