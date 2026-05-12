@@ -627,9 +627,11 @@ def run_dashboard():
     if is_comae:
         total_recebido = d[d["Valor"] > 0]["Valor"].sum()
         total_descentr = d[d["Valor"] < 0]["Valor"].abs().sum()
-        c1, c2 = st.columns(2)
+        total_disp_all = disp_df["Valor"].sum() if not disp_df.empty else 0.0
+        c1, c2, c3 = st.columns(3)
         c1.metric("💰 Crédito Recebido",                   fmt_brl(total_recebido))
         c2.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
+        c3.metric("📊 Crédito Disponível",                 fmt_brl(total_disp_all))
     else:
         total_disp = disp_filt["Valor"].sum() if not disp_filt.empty else 0.0
         total_emp  = ne_filt["Total"].sum()   if not ne_filt.empty   else 0.0
@@ -687,6 +689,56 @@ def run_dashboard():
                 fig2.update_xaxes(range=[0, max_v * 1.45], tickformat=",.0f", showticklabels=False)
                 fig2.update_layout(**chart_layout(max(280, len(nat_desc) * 42)))
                 st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
+
+        # COMAE linha 2: Disponível por Unidade | Total Empenhado por Unidade
+        col3, col4 = st.columns(2)
+        with col3:
+            st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
+                        unsafe_allow_html=True)
+            if not disp_df.empty:
+                ug_disp = (disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
+                           .sort_values("Valor").tail(10))
+                nat_per_ug = (disp_df.groupby(["Unidade","Natureza"])["Valor"]
+                              .sum().reset_index()
+                              .sort_values(["Unidade","Valor"], ascending=[True,False]))
+                def _nat_h(u):
+                    sub = nat_per_ug[nat_per_ug["Unidade"]==u]
+                    return "<br>".join(f"• {r['Natureza'][:35]}: {fmt_brl(r['Valor'])}"
+                                       for _,r in sub.head(5).iterrows()) or "—"
+                ug_disp["fmt"]      = ug_disp["Valor"].apply(fmt_brl)
+                ug_disp["nat_info"] = ug_disp["Unidade"].apply(_nat_h)
+                fig3 = px.bar(ug_disp, x="Valor", y="Unidade", orientation="h",
+                              color_discrete_sequence=["#f59e0b"],
+                              labels={"Valor":"","Unidade":""}, custom_data=["fmt","nat_info"])
+                fig3.update_traces(
+                    text=ug_disp["fmt"], textposition="outside",
+                    textfont=dict(size=9, color="#94a3b8"),
+                    hovertemplate=("<b>%{y}</b><br>Disponível: %{customdata[0]}"
+                                   "<br><br><i>Por Natureza:</i><br>%{customdata[1]}<extra></extra>"),
+                    cliponaxis=False)
+                max_v = ug_disp["Valor"].max() if not ug_disp.empty else 1
+                fig3.update_xaxes(range=[0, max_v*1.45], tickformat=",.0f", showticklabels=False)
+                fig3.update_layout(**chart_layout(max(280, len(ug_disp)*42)))
+                st.plotly_chart(fig3, use_container_width=True, config=chart_cfg())
+
+        with col4:
+            st.markdown('<div class="section-title">Total Empenhado por Unidade</div>',
+                        unsafe_allow_html=True)
+            if not df_ne.empty:
+                emp_all = (df_ne.groupby("Unidade", as_index=False)["Total"].sum()
+                           .sort_values("Total", ascending=True).tail(10))
+                emp_all["fmt"] = emp_all["Total"].apply(fmt_brl)
+                fig4 = px.bar(emp_all, x="Total", y="Unidade", orientation="h",
+                              color_discrete_sequence=["#fbbf24"],
+                              labels={"Total":"","Unidade":""}, custom_data=["fmt"])
+                fig4.update_traces(text=emp_all["fmt"], textposition="outside",
+                                   textfont=dict(size=9, color="#94a3b8"),
+                                   hovertemplate="%{y}<br>Total: <b>%{customdata[0]}</b><extra></extra>",
+                                   cliponaxis=False)
+                max_v = emp_all["Total"].max() if not emp_all.empty else 1
+                fig4.update_xaxes(range=[0, max_v*1.45], tickformat=",.0f", showticklabels=False)
+                fig4.update_layout(**chart_layout(max(280, len(emp_all)*42)))
+                st.plotly_chart(fig4, use_container_width=True, config=chart_cfg())
     else:
         # Unidade: Disponível por Unidade | Empenhos por Unidade
         with col1:
