@@ -233,8 +233,7 @@ def build_nc_html(ncs: pd.DataFrame, d: pd.DataFrame) -> str:
             lv  = lr["Valor"]
             det_rows += (
                 f"<tr><td class='det-td' style='color:#94a3b8;white-space:nowrap'>{ldt}</td>"
-                f"<td class='det-td' style='color:#e2e8f0;font-size:11px'>{str(lr['UG_Cred'])[:50]}</td>"
-                f"<td class='det-td' style='color:#64748b;font-size:11px'>{str(lr['Natureza_Despesa'])[:35]}</td>"
+                f"<td class='det-td' style='color:#64748b;font-size:11px'>{str(lr['Natureza_Despesa'])[:50]}</td>"
                 f"<td class='det-td' style='text-align:right;font-family:monospace;"
                 f"color:{_vc(lv)};white-space:nowrap'>{fmt_brl(lv)}</td></tr>"
             )
@@ -250,7 +249,7 @@ def build_nc_html(ncs: pd.DataFrame, d: pd.DataFrame) -> str:
             f"<div class='nc-det'><p class='nc-det-desc'><strong>Descrição:</strong> {desc[:250]}</p>"
             f"<table style='width:100%;border-collapse:collapse'>"
             f"<thead><tr style='border-bottom:1px solid rgba(51,65,85,0.5)'>"
-            f"<th class='det-th'>Data</th><th class='det-th'>UG Cred</th>"
+            f"<th class='det-th'>Data</th>"
             f"<th class='det-th'>Natureza</th><th class='det-th' style='text-align:right'>Valor</th>"
             f"</tr></thead><tbody>{det_rows}</tbody></table></div></details>"
         )
@@ -407,6 +406,10 @@ def load_data() -> pd.DataFrame:
     df = df[["Data_Emissao", "NC", "Descricao", "Natureza_Despesa", "Valor"]].copy()
 
     df.replace({"nan": pd.NA, "": pd.NA}, inplace=True)
+
+    # Remove última linha (total) — linhas sem Natureza são cabeçalho/total
+    df = df[df["Natureza_Despesa"].notna() & df["Natureza_Despesa"].astype(str).str.strip().ne("")].copy()
+
     for col in ("Data_Emissao", "NC", "Descricao"):
         df[col] = df[col].ffill()
 
