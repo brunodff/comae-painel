@@ -203,7 +203,7 @@ def chart_layout(height=300, angle=0):
                    showline=False, zeroline=False),
         yaxis=dict(gridcolor="rgba(30,42,58,0.6)", showline=False, zeroline=False),
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
-    )
+    )cebi
 
 
 def _vc(v):
@@ -561,28 +561,37 @@ def run_dashboard():
     # ── Filtros ────────────────────────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    f1, f2, f3, f4, f5 = st.columns([1.2, 4.5, 3.0, 0.38, 0.38])
+    # Unidades disponíveis (de disp_df + df_ne)
+    ug_from_disp = set(disp_df["Unidade"].dropna().unique()) if not disp_df.empty else set()
+    ug_from_ne   = set(df_ne["Unidade"].dropna().unique())   if not df_ne.empty   else set()
+    ug_opts_raw  = sorted({str(v) for v in (ug_from_disp | ug_from_ne)
+                           if str(v).strip() not in ("", "nan")})
+    ug_opts      = ["Todas"] + ug_opts_raw
+
+    f1, f2, f3, f4, f5, f6 = st.columns([1.1, 3.2, 3.2, 2.5, 0.38, 0.38])
     with f1:
         op_sel = st.selectbox("Operação", ["Todos", "CATRIMANI", "ZIDA"],
                               label_visibility="collapsed")
     with f2:
+        ug_sel = st.selectbox("Unidade", ug_opts, label_visibility="collapsed")
+    with f3:
         nat_opts = sorted({str(v) for v in df["Natureza_Despesa"]
                            if pd.notna(v) and str(v).strip() not in ("", "—", "nan")})
         nat_sel  = st.multiselect("Natureza", nat_opts, placeholder="Natureza Despesa",
                                   label_visibility="collapsed")
-    with f3:
+    with f4:
         search = st.text_input("Busca", placeholder="🔍 Busca livre…",
                                label_visibility="collapsed")
-    with f4:
+    with f5:
         if st.button("🔄", help="Atualizar dados", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-    with f5:
+    with f6:
         if st.button("🚪", help="Sair", use_container_width=True):
             st.session_state.logged_in = False
             st.rerun()
 
-    # ── Dataset ────────────────────────────────────────────────────────────────
+    # ── Dataset principal (COMAE) — filtrado por op/nat/busca ─────────────────
     d = df.copy()
     if op_sel != "Todos":
         d = d[d["Operacao"] == op_sel]
@@ -592,28 +601,40 @@ def run_dashboard():
         m0 = d.apply(lambda r: search.lower() in r.astype(str).str.cat(sep=" ").lower(), axis=1)
         d = d[m0]
 
-    if d.empty:
-        st.warning("Nenhum dado encontrado com os filtros selecionados.")
-        return
+    # ── Disponível e empenhos filtrados por unidade ────────────────────────────
+    def _filt_by_ug(frame: pd.DataFrame, col: str) -> pd.DataFrame:
+        if frame.empty or ug_sel == "Todas":
+            return frame.copy()
+        term = ug_sel[:30].upper()
+        mask = frame[col].str.upper().str.contains(term, na=False, regex=False)
+        return frame[mask].copy() if mask.any() else frame.copy()
 
-    ne_filt = df_ne.copy()
+    disp_filt = _filt_by_ug(disp_df, "Unidade")
+    ne_filt   = _filt_by_ug(df_ne,   "Unidade")
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
     st.divider()
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
-    total_pos  = d[d["Valor"] > 0]["Valor"].sum()
-    total_neg  = d[d["Valor"] < 0]["Valor"].sum()
+    total_disp      = disp_filt["Valor"].sum() if not disp_filt.empty else 0.0
+    total_empenhado = ne_filt["Total"].sum()   if not ne_filt.empty   else 0.0
 
-    total_disp      = disp_df["Valor"].sum() if not disp_df.empty else (total_pos + total_neg)
-    total_descentr  = d[d["Valor"] < 0]["Valor"].abs().sum()
-    total_empenhado = ne_filt["Total"].sum() if not ne_filt.empty else 0.0
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("💰 Crédito Recebido",                   fmt_brl(total_pos))
-    c2.metric("📊 Crédito Disponível",                 fmt_brl(total_disp))
-    c3.metric("📋 Crédito Empenhado",                  fmt_brl(total_empenhado))
-    c4.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
+    if ug_sel == "Todas":
+        # Visão COMAE: recebido e descentralizado vêm da planilha principal
+        total_recebido = d[d["Valor"] > 0]["Valor"].sum()
+        total_descentr = d[d["Valor"] < 0]["Valor"].abs().sum()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("💰 Crédito Recebido",                   fmt_brl(total_recebido))
+        c2.metric("📊 Crédito Disponível",                 fmt_brl(total_disp))
+        c3.metric("📋 Crédito Empenhado",                  fmt_brl(total_empenhado))
+        c4.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
+    else:
+        # Visão unidade: recebido = disponível + empenhado
+        total_recebido = total_disp + total_empenhado
+        c1, c2, c3 = st.columns(3)
+        c1.metric("💰 Crédito Recebido",   fmt_brl(total_recebido))
+        c2.metric("📊 Crédito Disponível", fmt_brl(total_disp))
+        c3.metric("📋 Crédito Empenhado",  fmt_brl(total_empenhado))
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -621,39 +642,53 @@ def run_dashboard():
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown('<div class="section-title">Crédito Recebido por Natureza</div>',
-                    unsafe_allow_html=True)
-        nat_rec = (
-            d[d["Valor"] > 0]
-            .groupby("Natureza_Despesa", as_index=False)["Valor"].sum()
-            .sort_values("Valor").tail(10)
-        )
-        nat_rec["fmt"] = nat_rec["Valor"].apply(fmt_brl)
-        fig1 = px.bar(nat_rec, x="Valor", y="Natureza_Despesa", orientation="h",
-                      color_discrete_sequence=["#7c3aed"],
-                      labels={"Valor": "", "Natureza_Despesa": ""},
-                      custom_data=["fmt"])
-        fig1.update_traces(
-            text=nat_rec["fmt"], textposition="outside",
-            textfont=dict(size=9, color="#94a3b8"),
-            hovertemplate="%{y}<br><b>%{customdata[0]}</b><extra></extra>",
-            cliponaxis=False,
-        )
-        max_v1 = nat_rec["Valor"].max() if not nat_rec.empty else 1
-        fig1.update_xaxes(range=[0, max_v1 * 1.45], tickformat=",.0f", showticklabels=False)
-        fig1.update_layout(**chart_layout(max(280, len(nat_rec) * 42)))
-        st.plotly_chart(fig1, use_container_width=True, config=chart_cfg())
+        if ug_sel == "Todas":
+            # COMAE: recebido por natureza (planilha principal, positivos)
+            st.markdown('<div class="section-title">Crédito Recebido por Natureza</div>',
+                        unsafe_allow_html=True)
+            nat_src = (
+                d[d["Valor"] > 0]
+                .groupby("Natureza_Despesa", as_index=False)["Valor"].sum()
+                .sort_values("Valor").tail(10)
+            )
+            y_col = "Natureza_Despesa"
+        else:
+            # Unidade: disponível por natureza
+            st.markdown('<div class="section-title">Crédito Disponível por Natureza</div>',
+                        unsafe_allow_html=True)
+            nat_src = (
+                disp_filt.groupby("Natureza", as_index=False)["Valor"].sum()
+                .sort_values("Valor").tail(10)
+            )
+            y_col = "Natureza"
+
+        if not nat_src.empty:
+            nat_src["fmt"] = nat_src["Valor"].apply(fmt_brl)
+            fig1 = px.bar(nat_src, x="Valor", y=y_col, orientation="h",
+                          color_discrete_sequence=["#7c3aed"],
+                          labels={"Valor": "", y_col: ""},
+                          custom_data=["fmt"])
+            fig1.update_traces(
+                text=nat_src["fmt"], textposition="outside",
+                textfont=dict(size=9, color="#94a3b8"),
+                hovertemplate="%{y}<br><b>%{customdata[0]}</b><extra></extra>",
+                cliponaxis=False,
+            )
+            max_v1 = nat_src["Valor"].max()
+            fig1.update_xaxes(range=[0, max_v1 * 1.45], tickformat=",.0f", showticklabels=False)
+            fig1.update_layout(**chart_layout(max(280, len(nat_src) * 42)))
+            st.plotly_chart(fig1, use_container_width=True, config=chart_cfg())
 
     with col2:
         st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
                     unsafe_allow_html=True)
-        if not disp_df.empty:
+        if not disp_filt.empty:
             ug_disp = (
-                disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
+                disp_filt.groupby("Unidade", as_index=False)["Valor"].sum()
                 .sort_values("Valor").tail(10)
             )
             nat_per_ug_disp = (
-                disp_df.groupby(["Unidade", "Natureza"])["Valor"]
+                disp_filt.groupby(["Unidade", "Natureza"])["Valor"]
                 .sum().reset_index()
                 .sort_values(["Unidade", "Valor"], ascending=[True, False])
             )
@@ -683,7 +718,7 @@ def run_dashboard():
             fig2.update_xaxes(range=[0, max_v2 * 1.45], tickformat=",.0f", showticklabels=False)
             fig2.update_layout(**chart_layout(max(280, len(ug_disp) * 42)))
             st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
-        else:
+        elif disp_df.empty:
             st.info("Dados de crédito disponível não encontrados.")
 
     # ── Gráficos — linha 2: Desc. por Mês | Desc. por Natureza ───────────────
