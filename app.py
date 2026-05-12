@@ -573,7 +573,8 @@ def run_dashboard():
         ug_sel = st.selectbox("UG Cred", ug_opts, index=comae_idx,
                               label_visibility="collapsed")
     with f3:
-        nat_opts = sorted(set(df["Natureza_Despesa"]) - {"—", "nan"})
+        nat_opts = sorted({str(v) for v in df["Natureza_Despesa"]
+                           if pd.notna(v) and str(v).strip() not in ("", "—", "nan")})
         nat_sel  = st.multiselect("Natureza", nat_opts, placeholder="Natureza Despesa",
                                   label_visibility="collapsed")
     with f4:
