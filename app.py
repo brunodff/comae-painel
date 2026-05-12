@@ -63,7 +63,17 @@ st.markdown(f"""
 [data-testid="stTextInput"]>div{{
     background:rgba(22,27,39,0.75)!important;backdrop-filter:blur(12px)!important;
     border-radius:10px!important;border-color:rgba(30,42,58,0.8)!important}}
-input[type="text"]{{background:transparent!important;color:#e2e8f0!important}}
+[data-baseweb="base-input"],
+[data-baseweb="input"]{{
+    background-color:rgba(255,255,255,0.12)!important;
+    border-color:rgba(251,191,36,0.25)!important}}
+[data-baseweb="base-input"] input,
+[data-baseweb="base-input"] input[type="text"],
+[data-baseweb="base-input"] input[type="password"]{{
+    color:#e2e8f0!important;
+    -webkit-text-fill-color:#e2e8f0!important;
+    background-color:transparent!important;
+    caret-color:#fbbf24!important}}
 
 /* ── Dropdown options ── */
 [data-baseweb="popover"]{{z-index:9999!important}}
@@ -469,11 +479,50 @@ def load_empenhos() -> pd.DataFrame:
     return df_ne.reset_index(drop=True)
 
 
+# ─── DATA — Crédito Disponível ────────────────────────────────────────────────
+
+DISP_SHEET_ID = "1uowGn5MLRkIwreOqdUDDMMPfCqyluso7oau35Z1u1po"
+DISP_GID      = "200878992"
+
+
+@st.cache_data(ttl=1800, show_spinner="Carregando crédito disponível…")
+def load_disponivel() -> pd.DataFrame:
+    url = (f"https://docs.google.com/spreadsheets/d/{DISP_SHEET_ID}"
+           f"/export?format=csv&gid={DISP_GID}")
+    try:
+        raw = pd.read_csv(url, header=None, dtype=str)
+    except Exception as e:
+        st.warning(f"Planilha de crédito disponível indisponível: {e}")
+        return pd.DataFrame()
+
+    if len(raw.columns) < 8:
+        return pd.DataFrame()
+
+    raw = raw.iloc[:, :8].copy()
+    raw.columns = list("ABCDEFGH")
+
+    df_disp = pd.DataFrame({
+        "Natureza": raw["E"].astype(str).str.strip(),
+        "Unidade":  raw["G"].astype(str).str.strip(),
+        "Valor":    raw["H"].apply(parse_br),
+    })
+
+    df_disp = df_disp[
+        df_disp["Valor"].notna() &
+        (df_disp["Valor"] != 0) &
+        df_disp["Unidade"].notna() &
+        ~df_disp["Unidade"].str.strip().isin(["", "nan", "NaN"])
+    ].copy()
+
+    return df_disp.reset_index(drop=True)
+
+
 # ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
 def run_dashboard():
-    df    = load_data()
-    df_ne = load_empenhos()
+    df      = load_data()
+    df_ne   = load_empenhos()
+    disp_df = load_disponivel()
     if df.empty:
         st.stop()
 
@@ -510,7 +559,8 @@ def run_dashboard():
     # ── Filtros ────────────────────────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    ug_opts_raw = sorted(set(df["UG_Cred"]) - {"—", "nan"})
+    ug_opts_raw = sorted({str(v) for v in df["UG_Cred"]
+                          if pd.notna(v) and str(v).strip() not in ("", "—", "nan")})
     ug_opts     = ["Todas"] + ug_opts_raw
     comae_idx   = next(
         (i + 1 for i, u in enumerate(ug_opts_raw) if UGCRED_COMAE in u.upper()), 0)
@@ -572,7 +622,18 @@ def run_dashboard():
     # ── KPIs ──────────────────────────────────────────────────────────────────
     total_pos  = d[d["Valor"] > 0]["Valor"].sum()
     total_neg  = d[d["Valor"] < 0]["Valor"].sum()
-    total_disp = total_pos + total_neg
+
+    # Crédito Disponível vem da planilha dedicada (col H), filtrado por UG se selecionada
+    if not disp_df.empty:
+        disp_filt = disp_df.copy()
+        if ug_sel != "Todas":
+            term = ug_sel[:25].upper()
+            mask_d = disp_filt["Unidade"].str.upper().str.contains(term, na=False, regex=False)
+            if mask_d.any():
+                disp_filt = disp_filt[mask_d]
+        total_disp = disp_filt["Valor"].sum()
+    else:
+        total_disp = total_pos + total_neg
 
     mask_comae     = d_base["UG_Cred"].str.upper().str.contains(UGCRED_COMAE, na=False)
     total_descentr = d_base[(d_base["Valor"] > 0) & (~mask_comae)]["Valor"].sum()
@@ -624,43 +685,44 @@ def run_dashboard():
     with col2:
         st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
                     unsafe_allow_html=True)
-        # Pré-computa natureza por UG para hover enriquecido
-        nat_per_ug = (
-            d_base.groupby(["UG_Cred", "Natureza_Despesa"])["Valor"]
-            .sum().reset_index()
-            .sort_values(["UG_Cred", "Valor"], ascending=[True, False])
-        )
-        def _nat_hover(ug_name):
-            sub = nat_per_ug[nat_per_ug["UG_Cred"] == ug_name]
-            return "<br>".join(
-                f"• {r['Natureza_Despesa'][:35]}: {fmt_brl(r['Valor'])}"
-                for _, r in sub.head(5).iterrows()
-            ) or "—"
+        if not disp_df.empty:
+            ug_disp = (
+                disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
+                .sort_values("Valor").tail(10)
+            )
+            nat_per_ug_disp = (
+                disp_df.groupby(["Unidade", "Natureza"])["Valor"]
+                .sum().reset_index()
+                .sort_values(["Unidade", "Valor"], ascending=[True, False])
+            )
+            def _nat_hover(ug_name):
+                sub = nat_per_ug_disp[nat_per_ug_disp["Unidade"] == ug_name]
+                return "<br>".join(
+                    f"• {r['Natureza'][:35]}: {fmt_brl(r['Valor'])}"
+                    for _, r in sub.head(5).iterrows()
+                ) or "—"
 
-        ug_disp = (
-            d_base.groupby("UG_Cred", as_index=False)["Valor"].sum()
-            .rename(columns={"Valor": "Disponível"})
-            .sort_values("Disponível").tail(10)
-        )
-        ug_disp["fmt"]      = ug_disp["Disponível"].apply(fmt_brl)
-        ug_disp["nat_info"] = ug_disp["UG_Cred"].apply(_nat_hover)
-        fig2 = px.bar(ug_disp, x="Disponível", y="UG_Cred", orientation="h",
-                      color_discrete_sequence=["#f59e0b"],
-                      labels={"Disponível": "", "UG_Cred": ""},
-                      custom_data=["fmt", "nat_info"])
-        fig2.update_traces(
-            text=ug_disp["fmt"], textposition="outside",
-            textfont=dict(size=9, color="#94a3b8"),
-            hovertemplate=(
-                "<b>%{y}</b><br>Disponível: %{customdata[0]}"
-                "<br><br><i>Por Natureza:</i><br>%{customdata[1]}<extra></extra>"
-            ),
-            cliponaxis=False,
-        )
-        max_v2 = ug_disp["Disponível"].max() if not ug_disp.empty else 1
-        fig2.update_xaxes(range=[0, max_v2 * 1.45], tickformat=",.0f", showticklabels=False)
-        fig2.update_layout(**chart_layout(max(280, len(ug_disp) * 42)))
-        st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
+            ug_disp["fmt"]      = ug_disp["Valor"].apply(fmt_brl)
+            ug_disp["nat_info"] = ug_disp["Unidade"].apply(_nat_hover)
+            fig2 = px.bar(ug_disp, x="Valor", y="Unidade", orientation="h",
+                          color_discrete_sequence=["#f59e0b"],
+                          labels={"Valor": "", "Unidade": ""},
+                          custom_data=["fmt", "nat_info"])
+            fig2.update_traces(
+                text=ug_disp["fmt"], textposition="outside",
+                textfont=dict(size=9, color="#94a3b8"),
+                hovertemplate=(
+                    "<b>%{y}</b><br>Disponível: %{customdata[0]}"
+                    "<br><br><i>Por Natureza:</i><br>%{customdata[1]}<extra></extra>"
+                ),
+                cliponaxis=False,
+            )
+            max_v2 = ug_disp["Valor"].max() if not ug_disp.empty else 1
+            fig2.update_xaxes(range=[0, max_v2 * 1.45], tickformat=",.0f", showticklabels=False)
+            fig2.update_layout(**chart_layout(max(280, len(ug_disp) * 42)))
+            st.plotly_chart(fig2, use_container_width=True, config=chart_cfg())
+        else:
+            st.info("Dados de crédito disponível não encontrados.")
 
     # ── Gráficos — linha 2: Desc. por Mês | Desc. por Natureza ───────────────
     col3, col4 = st.columns(2)
