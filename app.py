@@ -517,7 +517,10 @@ def load_disponivel() -> pd.DataFrame:
         (df_disp["Valor"] != 0) &
         df_disp["Unidade"].notna() &
         ~df_disp["Unidade"].str.strip().isin(["", "nan", "NaN"]) &
-        ~df_disp["Unidade"].str.upper().str.contains("TOTAL|SOMA|GRAND", na=False)
+        ~df_disp["Unidade"].str.upper().str.contains("TOTAL|SOMA|GRAND", na=False) &
+        df_disp["Natureza"].notna() &
+        ~df_disp["Natureza"].str.strip().isin(["", "nan", "NaN"]) &
+        ~df_disp["Natureza"].str.upper().str.contains("TOTAL|SOMA|GRAND", na=False)
     ].copy()
 
     return df_disp.reset_index(drop=True)
