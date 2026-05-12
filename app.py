@@ -451,7 +451,7 @@ def load_empenhos() -> pd.DataFrame:
     if len(raw.columns) < 10:
         return pd.DataFrame()
 
-    raw = raw.iloc[:, :10].copy()
+    raw = raw.iloc[5:, :10].reset_index(drop=True).copy()
     raw.columns = list("ABCDEFGHIJ")
 
     # Fill down coluna B (Unidade)
