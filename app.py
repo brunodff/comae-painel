@@ -401,9 +401,11 @@ def load_data() -> pd.DataFrame:
         st.error(f"Planilha de créditos retornou {len(df.columns)} colunas. Esperado 8.")
         return pd.DataFrame()
 
+    # A=Data, B=NC, C=Descricao, D-F=ignoradas, G=Natureza, H=Valor
     df = df.iloc[:, :8].copy()
-    df.columns = ["Data_Emissao", "NC", "Descricao", "UG_Codigo",
-                  "UG_Cred", "Conta_Contabil", "Natureza_Despesa", "Valor"]
+    df.columns = ["Data_Emissao", "NC", "Descricao", "_D", "_E", "_F", "Natureza_Despesa", "Valor"]
+    df = df[["Data_Emissao", "NC", "Descricao", "Natureza_Despesa", "Valor"]].copy()
+
     df.replace({"nan": pd.NA, "": pd.NA}, inplace=True)
     for col in ("Data_Emissao", "NC", "Descricao"):
         df[col] = df[col].ffill()
@@ -421,7 +423,7 @@ def load_data() -> pd.DataFrame:
     df["Nr_Pedido"] = df["Descricao"].apply(
         lambda x: (m := _RE_PED.search(str(x))) and m.group(1) or "—")
 
-    for c in ("UG_Cred", "Natureza_Despesa", "Descricao"):
+    for c in ("Natureza_Despesa", "Descricao"):
         df[c] = df[c].astype(str).str.strip().replace("nan", "—")
 
     return df
@@ -559,63 +561,42 @@ def run_dashboard():
     # ── Filtros ────────────────────────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    ug_opts_raw = sorted({str(v) for v in df["UG_Cred"]
-                          if pd.notna(v) and str(v).strip() not in ("", "—", "nan")})
-    ug_opts     = ["Todas"] + ug_opts_raw
-    comae_idx   = next(
-        (i + 1 for i, u in enumerate(ug_opts_raw) if UGCRED_COMAE in u.upper()), 0)
-
-    f1, f2, f3, f4, f5, f6 = st.columns([1.2, 3.8, 3.8, 2.5, 0.38, 0.38])
+    f1, f2, f3, f4, f5 = st.columns([1.2, 4.5, 3.0, 0.38, 0.38])
     with f1:
         op_sel = st.selectbox("Operação", ["Todos", "CATRIMANI", "ZIDA"],
                               label_visibility="collapsed")
     with f2:
-        ug_sel = st.selectbox("UG Cred", ug_opts, index=comae_idx,
-                              label_visibility="collapsed")
-    with f3:
         nat_opts = sorted({str(v) for v in df["Natureza_Despesa"]
                            if pd.notna(v) and str(v).strip() not in ("", "—", "nan")})
         nat_sel  = st.multiselect("Natureza", nat_opts, placeholder="Natureza Despesa",
                                   label_visibility="collapsed")
-    with f4:
+    with f3:
         search = st.text_input("Busca", placeholder="🔍 Busca livre…",
                                label_visibility="collapsed")
-    with f5:
+    with f4:
         if st.button("🔄", help="Atualizar dados", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-    with f6:
+    with f5:
         if st.button("🚪", help="Sair", use_container_width=True):
             st.session_state.logged_in = False
             st.rerun()
 
-    # ── Datasets ───────────────────────────────────────────────────────────────
-    # d_base: op + nat + busca, sem filtro de UG (gráficos fixos)
-    d_base = df.copy()
+    # ── Dataset ────────────────────────────────────────────────────────────────
+    d = df.copy()
     if op_sel != "Todos":
-        d_base = d_base[d_base["Operacao"] == op_sel]
+        d = d[d["Operacao"] == op_sel]
     if nat_sel:
-        d_base = d_base[d_base["Natureza_Despesa"].isin(nat_sel)]
+        d = d[d["Natureza_Despesa"].isin(nat_sel)]
     if search:
-        m0 = d_base.apply(lambda r: search.lower() in r.astype(str).str.cat(sep=" ").lower(), axis=1)
-        d_base = d_base[m0]
-
-    # d: filtrado por tudo
-    d = d_base.copy()
-    if ug_sel != "Todas":
-        d = d[d["UG_Cred"] == ug_sel]
+        m0 = d.apply(lambda r: search.lower() in r.astype(str).str.cat(sep=" ").lower(), axis=1)
+        d = d[m0]
 
     if d.empty:
         st.warning("Nenhum dado encontrado com os filtros selecionados.")
         return
 
-    # Empenhos filtrados por UG (match substring)
     ne_filt = df_ne.copy()
-    if not df_ne.empty and ug_sel != "Todas":
-        term = ug_sel[:25].upper()
-        ne_filt = df_ne[df_ne["Unidade"].str.upper().str.contains(term, na=False, regex=False)]
-        if ne_filt.empty:
-            ne_filt = df_ne.copy()
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
     st.divider()
@@ -624,35 +605,15 @@ def run_dashboard():
     total_pos  = d[d["Valor"] > 0]["Valor"].sum()
     total_neg  = d[d["Valor"] < 0]["Valor"].sum()
 
-    # Crédito Disponível vem da planilha dedicada (col H), filtrado por UG se selecionada
-    if not disp_df.empty:
-        disp_filt = disp_df.copy()
-        if ug_sel != "Todas":
-            term = ug_sel[:25].upper()
-            mask_d = disp_filt["Unidade"].str.upper().str.contains(term, na=False, regex=False)
-            if mask_d.any():
-                disp_filt = disp_filt[mask_d]
-        total_disp = disp_filt["Valor"].sum()
-    else:
-        total_disp = total_pos + total_neg
-
-    mask_comae     = d_base["UG_Cred"].str.upper().str.contains(UGCRED_COMAE, na=False)
-    total_descentr = d_base[(d_base["Valor"] > 0) & (~mask_comae)]["Valor"].sum()
+    total_disp      = disp_df["Valor"].sum() if not disp_df.empty else (total_pos + total_neg)
+    total_descentr  = d[d["Valor"] < 0]["Valor"].abs().sum()
     total_empenhado = ne_filt["Total"].sum() if not ne_filt.empty else 0.0
 
-    show_descentr = (ug_sel == "Todas") or (UGCRED_COMAE in ug_sel.upper())
-
-    if show_descentr:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("💰 Crédito Recebido",                   fmt_brl(total_pos))
-        c2.metric("📊 Crédito Disponível",                 fmt_brl(total_disp))
-        c3.metric("📋 Crédito Empenhado",                  fmt_brl(total_empenhado))
-        c4.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
-    else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("💰 Crédito Recebido",   fmt_brl(total_pos))
-        c2.metric("📊 Crédito Disponível", fmt_brl(total_disp))
-        c3.metric("📋 Crédito Empenhado",  fmt_brl(total_empenhado))
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("💰 Crédito Recebido",                   fmt_brl(total_pos))
+    c2.metric("📊 Crédito Disponível",                 fmt_brl(total_disp))
+    c3.metric("📋 Crédito Empenhado",                  fmt_brl(total_empenhado))
+    c4.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -660,27 +621,27 @@ def run_dashboard():
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown('<div class="section-title">Crédito Recebido por UG</div>',
+        st.markdown('<div class="section-title">Crédito Recebido por Natureza</div>',
                     unsafe_allow_html=True)
-        ug_rec = (
-            d_base[d_base["Valor"] > 0]
-            .groupby("UG_Cred", as_index=False)["Valor"].sum()
+        nat_rec = (
+            d[d["Valor"] > 0]
+            .groupby("Natureza_Despesa", as_index=False)["Valor"].sum()
             .sort_values("Valor").tail(10)
         )
-        ug_rec["fmt"] = ug_rec["Valor"].apply(fmt_brl)
-        fig1 = px.bar(ug_rec, x="Valor", y="UG_Cred", orientation="h",
+        nat_rec["fmt"] = nat_rec["Valor"].apply(fmt_brl)
+        fig1 = px.bar(nat_rec, x="Valor", y="Natureza_Despesa", orientation="h",
                       color_discrete_sequence=["#7c3aed"],
-                      labels={"Valor": "", "UG_Cred": ""},
+                      labels={"Valor": "", "Natureza_Despesa": ""},
                       custom_data=["fmt"])
         fig1.update_traces(
-            text=ug_rec["fmt"], textposition="outside",
+            text=nat_rec["fmt"], textposition="outside",
             textfont=dict(size=9, color="#94a3b8"),
             hovertemplate="%{y}<br><b>%{customdata[0]}</b><extra></extra>",
             cliponaxis=False,
         )
-        max_v1 = ug_rec["Valor"].max() if not ug_rec.empty else 1
+        max_v1 = nat_rec["Valor"].max() if not nat_rec.empty else 1
         fig1.update_xaxes(range=[0, max_v1 * 1.45], tickformat=",.0f", showticklabels=False)
-        fig1.update_layout(**chart_layout(max(280, len(ug_rec) * 42)))
+        fig1.update_layout(**chart_layout(max(280, len(nat_rec) * 42)))
         st.plotly_chart(fig1, use_container_width=True, config=chart_cfg())
 
     with col2:
@@ -731,34 +692,28 @@ def run_dashboard():
     with col3:
         st.markdown('<div class="section-title">Crédito Descentralizado por Mês</div>',
                     unsafe_allow_html=True)
-        if show_descentr:
-            td_neg = d[d["Valor"] < 0].copy()
-            if not td_neg.empty:
-                td_neg["Mes"]       = td_neg["Data_Emissao"].dt.to_period("M").astype(str)
-                td_neg["Valor_abs"] = td_neg["Valor"].abs()
-                ev_neg = td_neg.groupby(["Mes", "Operacao"], as_index=False)["Valor_abs"].sum()
-                ev_neg["fmt"] = ev_neg["Valor_abs"].apply(fmt_brl)
-                fig3 = px.bar(ev_neg, x="Mes", y="Valor_abs", color="Operacao", barmode="group",
-                              color_discrete_map={"ZIDA": "#7c3aed", "CATRIMANI": "#f59e0b"},
-                              labels={"Valor_abs": "", "Mes": "", "Operacao": "Operação"},
-                              custom_data=["fmt"])
-                fig3.update_traces(
-                    text=ev_neg["fmt"], textposition="outside",
-                    textfont=dict(size=8, color="#94a3b8"),
-                    hovertemplate="%{x} · %{fullData.name}<br><b>%{customdata[0]}</b><extra></extra>",
-                    cliponaxis=False,
-                )
-                max_v3 = ev_neg["Valor_abs"].max() if not ev_neg.empty else 1
-                fig3.update_yaxes(range=[0, max_v3 * 1.4], tickformat=",.0f", showticklabels=False)
-                fig3.update_layout(**chart_layout(300))
-                st.plotly_chart(fig3, use_container_width=True, config=chart_cfg())
-            else:
-                st.info("Sem crédito descentralizado para os filtros selecionados.")
+        td_neg = d[d["Valor"] < 0].copy()
+        if not td_neg.empty:
+            td_neg["Mes"]       = td_neg["Data_Emissao"].dt.to_period("M").astype(str)
+            td_neg["Valor_abs"] = td_neg["Valor"].abs()
+            ev_neg = td_neg.groupby(["Mes", "Operacao"], as_index=False)["Valor_abs"].sum()
+            ev_neg["fmt"] = ev_neg["Valor_abs"].apply(fmt_brl)
+            fig3 = px.bar(ev_neg, x="Mes", y="Valor_abs", color="Operacao", barmode="group",
+                          color_discrete_map={"ZIDA": "#7c3aed", "CATRIMANI": "#f59e0b"},
+                          labels={"Valor_abs": "", "Mes": "", "Operacao": "Operação"},
+                          custom_data=["fmt"])
+            fig3.update_traces(
+                text=ev_neg["fmt"], textposition="outside",
+                textfont=dict(size=8, color="#94a3b8"),
+                hovertemplate="%{x} · %{fullData.name}<br><b>%{customdata[0]}</b><extra></extra>",
+                cliponaxis=False,
+            )
+            max_v3 = ev_neg["Valor_abs"].max() if not ev_neg.empty else 1
+            fig3.update_yaxes(range=[0, max_v3 * 1.4], tickformat=",.0f", showticklabels=False)
+            fig3.update_layout(**chart_layout(300))
+            st.plotly_chart(fig3, use_container_width=True, config=chart_cfg())
         else:
-            st.markdown(
-                "<div style='color:#475569;font-size:12px;padding:40px 0;text-align:center'>"
-                "Este gráfico está disponível apenas para o COMAE.</div>",
-                unsafe_allow_html=True)
+            st.info("Sem crédito descentralizado para os filtros selecionados.")
 
     with col4:
         st.markdown('<div class="section-title">Crédito Descentralizado por Natureza de Despesa</div>',
