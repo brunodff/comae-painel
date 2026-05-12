@@ -203,7 +203,7 @@ def chart_layout(height=300, angle=0):
                    showline=False, zeroline=False),
         yaxis=dict(gridcolor="rgba(30,42,58,0.6)", showline=False, zeroline=False),
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
-    )cebi
+    )
 
 
 def _vc(v):
