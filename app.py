@@ -523,9 +523,9 @@ def load_disponivel() -> pd.DataFrame:
 
     def _classif_op(desc) -> str:
         d = str(desc).upper()
-        if "(ZIDA)" in d:
+        if "ZIDA" in d:
             return "ZIDA"
-        if "A CARGO DO COMAE" in d:
+        if "CATRIMANI" in d:
             return "CATRIMANI"
         return ""
 
