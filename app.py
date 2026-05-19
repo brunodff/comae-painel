@@ -506,11 +506,25 @@ def load_disponivel() -> pd.DataFrame:
     raw = raw.iloc[:, :8].copy()
     raw.columns = list("ABCDEFGH")
 
+    # Classifica operação varrendo todas as colunas da linha
+    def _classif_row(row) -> str:
+        text = " ".join(str(v) for v in row.values).upper()
+        if "ZIDA" in text:
+            return "ZIDA"
+        if "CATRIMANI" in text:
+            return "CATRIMANI"
+        return ""
+
+    raw["_op"] = raw.apply(_classif_row, axis=1)
+    # Propaga o valor para linhas seguintes do mesmo NC (células mescladas viram None no CSV)
+    raw["_op"] = raw["_op"].replace("", pd.NA).ffill().fillna("")
+
     df_disp = pd.DataFrame({
         "Descricao": raw["C"].astype(str).str.strip(),
         "Natureza":  raw["E"].astype(str).str.strip(),
         "Unidade":   raw["G"].astype(str).str.strip(),
         "Valor":     raw["H"].apply(parse_br),
+        "Operacao":  raw["_op"],
     })
 
     df_disp = df_disp[
@@ -521,16 +535,6 @@ def load_disponivel() -> pd.DataFrame:
         ~df_disp["Unidade"].str.upper().str.contains("TOTAL|SOMA|GRAND", na=False)
     ].copy()
 
-    def _classif_op(desc) -> str:
-        d = str(desc).upper()
-        if "ZIDA" in d:
-            return "ZIDA"
-        if "CATRIMANI" in d:
-            return "CATRIMANI"
-        return ""
-
-    df_disp["Operacao"] = df_disp["Descricao"].apply(_classif_op)
-
     return df_disp.reset_index(drop=True)
 
 
@@ -540,8 +544,6 @@ def run_dashboard():
     df      = load_data()
     df_ne   = load_empenhos()
     disp_df = load_disponivel()
-    if not disp_df.empty:
-        st.write("🔍 DEBUG P2 — primeiras linhas:", disp_df[["Descricao","Operacao"]].head(8))
     if df.empty:
         st.stop()
 
