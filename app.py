@@ -521,8 +521,8 @@ def load_disponivel() -> pd.DataFrame:
         ~df_disp["Unidade"].str.upper().str.contains("TOTAL|SOMA|GRAND", na=False)
     ].copy()
 
-    def _classif_op(desc: str) -> str:
-        d = desc.upper()
+    def _classif_op(desc) -> str:
+        d = str(desc).upper()
         if "(ZIDA)" in d:
             return "ZIDA"
         if "A CARGO DO COMAE" in d:
