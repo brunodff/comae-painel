@@ -507,9 +507,10 @@ def load_disponivel() -> pd.DataFrame:
     raw.columns = list("ABCDEFGH")
 
     df_disp = pd.DataFrame({
-        "Natureza": raw["E"].astype(str).str.strip(),
-        "Unidade":  raw["G"].astype(str).str.strip(),
-        "Valor":    raw["H"].apply(parse_br),
+        "Descricao": raw["C"].astype(str).str.strip(),
+        "Natureza":  raw["E"].astype(str).str.strip(),
+        "Unidade":   raw["G"].astype(str).str.strip(),
+        "Valor":     raw["H"].apply(parse_br),
     })
 
     df_disp = df_disp[
@@ -519,6 +520,16 @@ def load_disponivel() -> pd.DataFrame:
         ~df_disp["Unidade"].str.strip().isin(["", "nan", "NaN"]) &
         ~df_disp["Unidade"].str.upper().str.contains("TOTAL|SOMA|GRAND", na=False)
     ].copy()
+
+    def _classif_op(desc: str) -> str:
+        d = desc.upper()
+        if "(ZIDA)" in d:
+            return "ZIDA"
+        if "A CARGO DO COMAE" in d:
+            return "CATRIMANI"
+        return ""
+
+    df_disp["Operacao"] = df_disp["Descricao"].apply(_classif_op)
 
     return df_disp.reset_index(drop=True)
 
@@ -609,6 +620,11 @@ def run_dashboard():
         m0 = d.apply(lambda r: search.lower() in r.astype(str).str.cat(sep=" ").lower(), axis=1)
         d = d[m0]
 
+    # P2 — filtrado por operação (depois de ug_opts para não sumir unidades)
+    disp_df_op = disp_df.copy()
+    if op_sel != "Todos" and "Operacao" in disp_df_op.columns:
+        disp_df_op = disp_df_op[disp_df_op["Operacao"] == op_sel]
+
     # P2/P3 — filtrados por unidade selecionada
     def _filt_unit(frame: pd.DataFrame, col: str) -> pd.DataFrame:
         if frame.empty:
@@ -617,7 +633,7 @@ def run_dashboard():
         mask = frame[col].str.upper().str.contains(term, na=False, regex=False)
         return frame[mask].copy() if mask.any() else pd.DataFrame()
 
-    disp_filt = _filt_unit(disp_df, "Unidade")
+    disp_filt = _filt_unit(disp_df_op, "Unidade")
     ne_filt   = _filt_unit(df_ne,   "Unidade")
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
@@ -695,10 +711,10 @@ def run_dashboard():
         with col3:
             st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
                         unsafe_allow_html=True)
-            if not disp_df.empty:
-                ug_disp = (disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
+            if not disp_df_op.empty:
+                ug_disp = (disp_df_op.groupby("Unidade", as_index=False)["Valor"].sum()
                            .sort_values("Valor").tail(10))
-                nat_per_ug = (disp_df.groupby(["Unidade","Natureza"])["Valor"]
+                nat_per_ug = (disp_df_op.groupby(["Unidade","Natureza"])["Valor"]
                               .sum().reset_index()
                               .sort_values(["Unidade","Valor"], ascending=[True,False]))
                 def _nat_h(u):
@@ -744,10 +760,10 @@ def run_dashboard():
         with col1:
             st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
                         unsafe_allow_html=True)
-            if not disp_df.empty:
-                ug_disp = (disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
+            if not disp_df_op.empty:
+                ug_disp = (disp_df_op.groupby("Unidade", as_index=False)["Valor"].sum()
                            .sort_values("Valor").tail(10))
-                nat_per_ug = (disp_df.groupby(["Unidade", "Natureza"])["Valor"]
+                nat_per_ug = (disp_df_op.groupby(["Unidade", "Natureza"])["Valor"]
                               .sum().reset_index()
                               .sort_values(["Unidade", "Valor"], ascending=[True, False]))
                 def _nat_hover(u):
