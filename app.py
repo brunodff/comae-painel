@@ -540,6 +540,8 @@ def run_dashboard():
     df      = load_data()
     df_ne   = load_empenhos()
     disp_df = load_disponivel()
+    if not disp_df.empty:
+        st.write("🔍 DEBUG P2 — primeiras linhas:", disp_df[["Descricao","Operacao"]].head(8))
     if df.empty:
         st.stop()
 
