@@ -503,50 +503,13 @@ def load_disponivel() -> pd.DataFrame:
     if len(raw.columns) < 8:
         return pd.DataFrame()
 
-    # Nomeia as primeiras 8 colunas (A-H) para acesso estruturado
-    cols8 = raw.iloc[:, :8].copy()
-    cols8.columns = list("ABCDEFGH")
-
-    # Propaga coluna C (células mescladas → None no CSV) para linhas do mesmo NC
-    cols8["C"] = cols8["C"].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA}).ffill().fillna("")
-
-    # Texto de busca: TODAS as colunas do CSV (a descrição completa pode estar além da col H)
-    raw["_text"] = raw.apply(
-        lambda r: " ".join(str(v) for v in r.values).upper(), axis=1
-    )
-    raw["_valor"] = cols8["H"].apply(parse_br)
-
-    def _classif(text: str, valor) -> str:
-        has_zida      = "ZIDA"      in text
-        has_catrimani = "CATRIMANI" in text
-        if pd.isna(valor) or valor == 0:
-            return ""
-        if valor > 0:
-            # Positivo: ZIDA se tiver ZIDA, senão CATRIMANI
-            return "ZIDA" if has_zida else "CATRIMANI"
-        else:
-            # Negativo: CATRIMANI prevalece (inclui CATRIMANI/ZIDA); ZIDA puro → ZIDA
-            if has_catrimani:
-                return "CATRIMANI"
-            if has_zida:
-                return "ZIDA"
-            return ""
-
-    raw["_op"] = raw.apply(lambda r: _classif(r["_text"], r["_valor"]), axis=1)
-
-    # DEBUG temporário — remove após confirmar
-    zida_count = (raw["_op"] == "ZIDA").sum()
-    catri_count = (raw["_op"] == "CATRIMANI").sum()
-    st.info(f"🔍 DEBUG P2: {zida_count} linhas ZIDA · {catri_count} linhas CATRIMANI · "
-            f"ex. col0={str(raw.iloc[5, 0])[:30]} col2={str(raw.iloc[5, 2])[:40]} "
-            f"ncols={len(raw.columns)}")
+    raw = raw.iloc[:, :8].copy()
+    raw.columns = list("ABCDEFGH")
 
     df_disp = pd.DataFrame({
-        "Descricao": cols8["C"].astype(str).str.strip(),
-        "Natureza":  cols8["E"].astype(str).str.strip(),
-        "Unidade":   cols8["G"].astype(str).str.strip(),
-        "Valor":     raw["_valor"],
-        "Operacao":  raw["_op"],
+        "Natureza": raw["E"].astype(str).str.strip(),
+        "Unidade":  raw["G"].astype(str).str.strip(),
+        "Valor":    raw["H"].apply(parse_br),
     })
 
     df_disp = df_disp[
@@ -646,11 +609,6 @@ def run_dashboard():
         m0 = d.apply(lambda r: search.lower() in r.astype(str).str.cat(sep=" ").lower(), axis=1)
         d = d[m0]
 
-    # P2 — filtrado por operação (depois de ug_opts para não sumir unidades)
-    disp_df_op = disp_df.copy()
-    if op_sel != "Todos" and "Operacao" in disp_df_op.columns:
-        disp_df_op = disp_df_op[disp_df_op["Operacao"] == op_sel]
-
     # P2/P3 — filtrados por unidade selecionada
     def _filt_unit(frame: pd.DataFrame, col: str) -> pd.DataFrame:
         if frame.empty:
@@ -659,8 +617,8 @@ def run_dashboard():
         mask = frame[col].str.upper().str.contains(term, na=False, regex=False)
         return frame[mask].copy() if mask.any() else pd.DataFrame()
 
-    disp_filt = _filt_unit(disp_df_op, "Unidade")
-    ne_filt   = _filt_unit(df_ne,   "Unidade")
+    disp_filt = _filt_unit(disp_df, "Unidade")
+    ne_filt   = _filt_unit(df_ne,  "Unidade")
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
     st.divider()
@@ -669,7 +627,7 @@ def run_dashboard():
     if is_comae:
         total_recebido = d[d["Valor"] > 0]["Valor"].sum()
         total_descentr = d[d["Valor"] < 0]["Valor"].abs().sum()
-        total_disp_all = disp_filt["Valor"].sum() if not disp_filt.empty else 0.0
+        total_disp_all = d["Valor"].sum()
         c1, c2, c3 = st.columns(3)
         c1.metric("💰 Crédito Recebido",                   fmt_brl(total_recebido))
         c2.metric("📤 Crédito Descentralizado pelo COMAE", fmt_brl(total_descentr))
@@ -737,10 +695,10 @@ def run_dashboard():
         with col3:
             st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
                         unsafe_allow_html=True)
-            if not disp_df_op.empty:
-                ug_disp = (disp_df_op.groupby("Unidade", as_index=False)["Valor"].sum()
+            if not disp_df.empty:
+                ug_disp = (disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
                            .sort_values("Valor").tail(10))
-                nat_per_ug = (disp_df_op.groupby(["Unidade","Natureza"])["Valor"]
+                nat_per_ug = (disp_df.groupby(["Unidade","Natureza"])["Valor"]
                               .sum().reset_index()
                               .sort_values(["Unidade","Valor"], ascending=[True,False]))
                 def _nat_h(u):
@@ -786,10 +744,10 @@ def run_dashboard():
         with col1:
             st.markdown('<div class="section-title">Crédito Disponível por Unidade</div>',
                         unsafe_allow_html=True)
-            if not disp_df_op.empty:
-                ug_disp = (disp_df_op.groupby("Unidade", as_index=False)["Valor"].sum()
+            if not disp_df.empty:
+                ug_disp = (disp_df.groupby("Unidade", as_index=False)["Valor"].sum()
                            .sort_values("Valor").tail(10))
-                nat_per_ug = (disp_df_op.groupby(["Unidade", "Natureza"])["Valor"]
+                nat_per_ug = (disp_df.groupby(["Unidade", "Natureza"])["Valor"]
                               .sum().reset_index()
                               .sort_values(["Unidade", "Valor"], ascending=[True, False]))
                 def _nat_hover(u):
