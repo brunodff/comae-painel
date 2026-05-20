@@ -506,24 +506,38 @@ def load_disponivel() -> pd.DataFrame:
     raw = raw.iloc[:, :8].copy()
     raw.columns = list("ABCDEFGH")
 
-    # Classifica operação varrendo todas as colunas da linha
-    def _classif_row(row) -> str:
-        text = " ".join(str(v) for v in row.values).upper()
-        if "ZIDA" in text:
-            return "ZIDA"
-        if "CATRIMANI" in text:
-            return "CATRIMANI"
-        return ""
+    # Propaga coluna C (células mescladas → None no CSV) para linhas do mesmo NC
+    raw["C"] = raw["C"].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA}).ffill().fillna("")
 
-    raw["_op"] = raw.apply(_classif_row, axis=1)
-    # Propaga o valor para linhas seguintes do mesmo NC (células mescladas viram None no CSV)
-    raw["_op"] = raw["_op"].replace("", pd.NA).ffill().fillna("")
+    # Texto de busca: todas as colunas A-G (exclui H para não confundir com valor)
+    raw["_text"] = raw[list("ABCDEFG")].apply(
+        lambda r: " ".join(str(v) for v in r.values).upper(), axis=1
+    )
+    raw["_valor"] = raw["H"].apply(parse_br)
+
+    def _classif(text: str, valor) -> str:
+        has_zida      = "ZIDA"      in text
+        has_catrimani = "CATRIMANI" in text
+        if pd.isna(valor) or valor == 0:
+            return ""
+        if valor > 0:
+            # Positivo: ZIDA se tiver ZIDA, senão CATRIMANI
+            return "ZIDA" if has_zida else "CATRIMANI"
+        else:
+            # Negativo: CATRIMANI prevalece (inclui CATRIMANI/ZIDA); ZIDA puro → ZIDA
+            if has_catrimani:
+                return "CATRIMANI"
+            if has_zida:
+                return "ZIDA"
+            return ""
+
+    raw["_op"] = raw.apply(lambda r: _classif(r["_text"], r["_valor"]), axis=1)
 
     df_disp = pd.DataFrame({
         "Descricao": raw["C"].astype(str).str.strip(),
         "Natureza":  raw["E"].astype(str).str.strip(),
         "Unidade":   raw["G"].astype(str).str.strip(),
-        "Valor":     raw["H"].apply(parse_br),
+        "Valor":     raw["_valor"],
         "Operacao":  raw["_op"],
     })
 
