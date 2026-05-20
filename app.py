@@ -503,17 +503,18 @@ def load_disponivel() -> pd.DataFrame:
     if len(raw.columns) < 8:
         return pd.DataFrame()
 
-    raw = raw.iloc[:, :8].copy()
-    raw.columns = list("ABCDEFGH")
+    # Nomeia as primeiras 8 colunas (A-H) para acesso estruturado
+    cols8 = raw.iloc[:, :8].copy()
+    cols8.columns = list("ABCDEFGH")
 
     # Propaga coluna C (células mescladas → None no CSV) para linhas do mesmo NC
-    raw["C"] = raw["C"].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA}).ffill().fillna("")
+    cols8["C"] = cols8["C"].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA}).ffill().fillna("")
 
-    # Texto de busca: todas as colunas A-G (exclui H para não confundir com valor)
-    raw["_text"] = raw[list("ABCDEFG")].apply(
+    # Texto de busca: TODAS as colunas do CSV (a descrição completa pode estar além da col H)
+    raw["_text"] = raw.apply(
         lambda r: " ".join(str(v) for v in r.values).upper(), axis=1
     )
-    raw["_valor"] = raw["H"].apply(parse_br)
+    raw["_valor"] = cols8["H"].apply(parse_br)
 
     def _classif(text: str, valor) -> str:
         has_zida      = "ZIDA"      in text
@@ -533,10 +534,17 @@ def load_disponivel() -> pd.DataFrame:
 
     raw["_op"] = raw.apply(lambda r: _classif(r["_text"], r["_valor"]), axis=1)
 
+    # DEBUG temporário — remove após confirmar
+    zida_count = (raw["_op"] == "ZIDA").sum()
+    catri_count = (raw["_op"] == "CATRIMANI").sum()
+    st.info(f"🔍 DEBUG P2: {zida_count} linhas ZIDA · {catri_count} linhas CATRIMANI · "
+            f"ex. col0={str(raw.iloc[5, 0])[:30]} col2={str(raw.iloc[5, 2])[:40]} "
+            f"ncols={len(raw.columns)}")
+
     df_disp = pd.DataFrame({
-        "Descricao": raw["C"].astype(str).str.strip(),
-        "Natureza":  raw["E"].astype(str).str.strip(),
-        "Unidade":   raw["G"].astype(str).str.strip(),
+        "Descricao": cols8["C"].astype(str).str.strip(),
+        "Natureza":  cols8["E"].astype(str).str.strip(),
+        "Unidade":   cols8["G"].astype(str).str.strip(),
         "Valor":     raw["_valor"],
         "Operacao":  raw["_op"],
     })
